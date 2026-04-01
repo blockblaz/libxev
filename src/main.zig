@@ -1,10 +1,15 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
+
+/// Resolve the backend: use the build-time override if provided,
+/// otherwise fall back to the platform default.
+const selected_backend: Backend = build_options.backend_override orelse Backend.default();
 
 /// The low-level IO interfaces using the recommended compile-time
 /// interface for the target system. We forward these as the default
 /// API of this package.
-const xev = Backend.default().Api();
+const xev = selected_backend.Api();
 pub const dynamic = xev.dynamic;
 pub const backend = xev.backend;
 pub const available = xev.available;
@@ -43,7 +48,7 @@ comptime {
     // This ensures that all the public decls from the API are forwarded
     // from the main struct.
     const main = @This();
-    const default = Backend.default().Api();
+    const default = selected_backend.Api();
     for (@typeInfo(default).@"struct".decls) |decl| {
         const Decl = @TypeOf(@field(default, decl.name));
         if (Decl == void) continue;
