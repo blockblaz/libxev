@@ -1,19 +1,29 @@
 const std = @import("std");
 const Step = std.Build.Step;
 
-/// A note on my build.zig style: I try to create all the artifacts first,
-/// unattached to any steps. At the end of the build() function, I create
-/// steps or attach unattached artifacts to predefined steps such as
-/// install. This means the only thing affecting the `zig build` user
-/// interaction is at the end of the build() file and makes it easier
-/// to reason about the structure.
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("xev", .{
+    // Allow consumers to override the default backend at compile time.
+    // Usage: -Dbackend=epoll (or io_uring, kqueue, etc.)
+    const backend_override = b.option(
+        @import("src/backend.zig").Backend,
+        "backend",
+        "Override the default I/O backend (e.g. epoll, io_uring, kqueue)",
+    );
+
+    const options = b.addOptions();
+    options.addOption(
+        ?@import("src/backend.zig").Backend,
+        "backend_override",
+        backend_override,
+    );
+
+    const xev_module = b.addModule("xev", .{
         .root_source_file = b.path("src/main.zig"),
     });
+    xev_module.addOptions("build_options", options);
 
     const emit_man = b.option(
         bool,
@@ -66,7 +76,6 @@ pub fn build(b: *std.Build) !void {
 
     // Dynamic C lib
     const dynamic_lib: ?*Step.Compile = lib: {
-        // We require native so we can link to libxml2
         if (!target.query.isNative()) break :lib null;
 
         const dynamic_lib = b.addLibrary(.{
@@ -182,10 +191,8 @@ fn buildBenchmarks(
     ), .{ .iterate = true });
     defer dir.close();
 
-    // Go through and add each as a step
     var it = dir.iterate();
     while (try it.next()) |entry| {
-        // Get the index of the last '.' so we can strip the extension.
         const index = std.mem.lastIndexOfScalar(
             u8,
             entry.name,
@@ -193,10 +200,8 @@ fn buildBenchmarks(
         ) orelse continue;
         if (index == 0) continue;
 
-        // Name of the app and full path to the entrypoint.
         const name = entry.name[0..index];
 
-        // Executable builder.
         const exe = b.addExecutable(.{
             .name = name,
             .root_module = b.createModule(.{
@@ -205,12 +210,11 @@ fn buildBenchmarks(
                     .{entry.name},
                 )),
                 .target = target,
-                .optimize = .ReleaseFast, // benchmarks are always release fast
+                .optimize = .ReleaseFast,
             }),
         });
         exe.root_module.addImport("xev", b.modules.get("xev").?);
 
-        // Store the mapping
         try steps.append(alloc, exe);
     }
 
@@ -233,10 +237,8 @@ fn buildExamples(
     ), .{ .iterate = true });
     defer dir.close();
 
-    // Go through and add each as a step
     var it = dir.iterate();
     while (try it.next()) |entry| {
-        // Get the index of the last '.' so we can strip the extension.
         const index = std.mem.lastIndexOfScalar(
             u8,
             entry.name,
@@ -244,7 +246,6 @@ fn buildExamples(
         ) orelse continue;
         if (index == 0) continue;
 
-        // Name of the app and full path to the entrypoint.
         const name = entry.name[0..index];
 
         const is_zig = std.mem.eql(u8, entry.name[index + 1 ..], "zig");
@@ -290,7 +291,6 @@ fn buildExamples(
             break :exe exe;
         };
 
-        // Store the mapping
         try steps.append(alloc, exe);
     }
 
@@ -310,8 +310,6 @@ fn manPages(b: *std.Build) ![]const *Step {
 
     var it = dir.iterate();
     while (try it.next()) |*entry| {
-        // Filenames must end in "{section}.scd" and sections are
-        // single numerals.
         const base = entry.name[0 .. entry.name.len - 4];
         const section = base[base.len - 1 ..];
 
